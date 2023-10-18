@@ -4,9 +4,9 @@ import gym
 import numpy as np
 from pynput.keyboard import Key, Listener
 import torch
-from examples.device.device_interface import DeviceInterface
-from examples.device.collect_enum import CollectEnum
-import examples.device.transform as T
+from device.device_interface import DeviceInterface
+from device.collect_enum import CollectEnum
+import device.transform as T
 
 
 class KeyboardInterface(DeviceInterface):

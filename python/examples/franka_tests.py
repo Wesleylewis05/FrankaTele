@@ -24,8 +24,8 @@ import torch
 import os
 import argparse
 import os.path as osp
-from examples.device import make_device
-from examples.device.keyboard_interface import KeyboardInterface
+from device import make_device
+from device.keyboard_interface import KeyboardInterface
 from typing import List
 def orientation_error(desired, current):
     cc = quat_conjugate(current)

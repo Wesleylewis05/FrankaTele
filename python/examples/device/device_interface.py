@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 
 import numpy.typing as npt
 
-from examples.device.collect_enum import CollectEnum
+from device.collect_enum import CollectEnum
 
 
 class DeviceInterface(ABC):
