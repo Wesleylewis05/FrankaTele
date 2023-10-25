@@ -169,10 +169,7 @@ def display_camera_views(gym, sim, env, cam_handles):
     for handle in cam_handles:
         # Get the RGBA image from the camera
         image = gym.get_camera_image(sim, env, handle, gymapi.IMAGE_COLOR)    
-        image = image.reshape(image.shape[0], -1, 4)
-        # img_cv2 = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
-        # cam_img = obs['obs'][:3].permute(1, 2, 0).cpu().numpy()
-        # image = image[:3].permute(1, 2, 0)#.cpu().numpy()        
+        image = image.reshape(image.shape[0], -1, 4)     
         images.append(image[:,:,:3])
 
     # Stack the images horizontally (side by side)
@@ -182,7 +179,7 @@ def display_camera_views(gym, sim, env, cam_handles):
     cv2.imshow('Camera Views', combined_image)
     cv2.waitKey(1)  # Refresh
 
-camera_count = 2
+camera_count = 1
 def setup_cam(gym, env, cam_width, cam_height, cam_pos, cam_target):
     cam_props = gymapi.CameraProperties()
     cam_props.width = cam_width
@@ -190,12 +187,39 @@ def setup_cam(gym, env, cam_width, cam_height, cam_pos, cam_target):
     cam_handle = gym.create_camera_sensor(env, cam_props)
     gym.set_camera_location(cam_handle, env, cam_pos, cam_target)
     return cam_handle, cam_props
-cam_width = 256
-cam_height = 256
-camera_poses = [gymapi.Vec3(1, 5, 2.5),gymapi.Vec3(2, 5, 2.5)] 
-cam_target = gymapi.Vec3(0.0, 0.0, 0.0)
-all_cam_handles = []  # List to store camera handles for all environments.
+bodycam_count = 1
+def setup_body_cam(gym, env, cam_width, cam_height, transform, handle):
+    """
+    gym: gym api
+    env: environment
+    cam_width: width of camera
+    cam_height: height of camera
+    transform: gymapi.Transform() (position and rotation)
+    handle: handle for part to follow
+    """
 
+    cam_props = gymapi.CameraProperties()
+    cam_props.width = cam_width
+    cam_props.height = cam_height    
+    cam_handle = gym.create_camera_sensor(env, cam_props)
+    gym.attach_camera_to_body(cam_handle, env, handle, transform, gymapi.FOLLOW_TRANSFORM)
+    return cam_handle, cam_props
+
+
+cam_width = 720//2
+cam_height = 500
+camera_poses = [gymapi.Vec3(0, 1, 0.5),gymapi.Vec3(1, 5, 2.5),] 
+cam_target = gymapi.Vec3(0.0, 0.0, 0.0)
+transform1 = gymapi.Transform(p=gymapi.Vec3(-0.04, 0, -0.05), r=gymapi.Quat.from_axis_angle(gymapi.Vec3(0, 1, 0), np.radians(-70.0)))
+camera_transform = [transform1]
+all_cam_handles = []  # List to store camera handles for all environments.
+ee_handles = []
+ee_idxs = []
+
+franka_link_dict = gym.get_asset_rigid_body_dict(franka_asset)
+franka_ee_index = franka_link_dict["k_ee_link"]
+franka_base_index = franka_link_dict["panda_link0"]
+# wrist end
 for i in range(num_envs):
     # Create env
     env = gym.create_env(sim, env_lower, env_upper, num_per_row)
@@ -217,7 +241,8 @@ for i in range(num_envs):
     hand_pose = gym.get_rigid_transform(env, hand_handle)
     init_pos_list.append([hand_pose.p.x, hand_pose.p.y, hand_pose.p.z])
     init_orn_list.append([hand_pose.r.x, hand_pose.r.y, hand_pose.r.z, hand_pose.r.w])
-    ee_handles = gym.find_actor_rigid_body_handle(env, franka_handle, "k_ee_link")
+    ee_idxs.append(gym.get_actor_rigid_body_index(env, franka_handle, franka_ee_index, gymapi.DOMAIN_SIM))
+    ee_handles.append(gym.find_actor_rigid_body_handle(env, franka_handle, "k_ee_link") )
     # Get global index of hand in rigid body state tensor
     hand_idx = gym.find_actor_rigid_body_index(env, franka_handle, "panda_hand", gymapi.DOMAIN_SIM)
     hand_idxs.append(hand_idx)
@@ -225,6 +250,10 @@ for i in range(num_envs):
     for j in range(camera_count):  # Set up cameras for the current environment.
         cam_handle, _ = setup_cam(gym, env, cam_width, cam_height, camera_poses[j], cam_target)
         env_cam_handles.append(cam_handle)
+    for j in range(bodycam_count):
+        cam_handle, _ = setup_body_cam(gym, env, cam_width, cam_height, camera_transform[j], ee_handles[j])
+        env_cam_handles.append(cam_handle)
+
     all_cam_handles.append(env_cam_handles)
 
 # Point camera at middle env
