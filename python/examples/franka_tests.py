@@ -24,9 +24,9 @@ import torch
 import os
 import argparse
 import os.path as osp
-from device import make_device
 from device.keyboard_interface import KeyboardInterface
 from typing import List
+import cv2
 def orientation_error(desired, current):
     cc = quat_conjugate(current)
     q_r = quat_mul(desired, cc)
@@ -164,6 +164,36 @@ def create_box(env_index, pose: List):
     box_idxs.append(box_idx)
 
 
+def display_camera_views(gym, sim, env, cam_handles):
+    images = []
+    for handle in cam_handles:
+        # Get the RGBA image from the camera
+        image = gym.get_camera_image(sim, env, handle, gymapi.IMAGE_COLOR)    
+
+        # img_cv2 = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+        images.append(image)
+
+    # Stack the images horizontally (side by side)
+    combined_image = np.hstack(images)
+
+    # Display the combined image
+    cv2.imshow('Camera Views', combined_image)
+    cv2.waitKey(1)  # Refresh
+
+camera_count = 2
+def setup_cam(gym, env, cam_width, cam_height, cam_pos, cam_target):
+    cam_props = gymapi.CameraProperties()
+    cam_props.width = cam_width
+    cam_props.height = cam_height    
+    cam_handle = gym.create_camera_sensor(env, cam_props)
+    gym.set_camera_location(cam_handle, env, cam_pos, cam_target)
+    return cam_handle, cam_props
+cam_width = 256
+cam_height = 256
+camera_poses = [gymapi.Vec3(1, 5, 2.5),gymapi.Vec3(2, 5, 2.5)] 
+cam_target = gymapi.Vec3(0.0, 0.0, 0.0)
+all_cam_handles = []  # List to store camera handles for all environments.
+
 for i in range(num_envs):
     # Create env
     env = gym.create_env(sim, env_lower, env_upper, num_per_row)
@@ -185,16 +215,21 @@ for i in range(num_envs):
     hand_pose = gym.get_rigid_transform(env, hand_handle)
     init_pos_list.append([hand_pose.p.x, hand_pose.p.y, hand_pose.p.z])
     init_orn_list.append([hand_pose.r.x, hand_pose.r.y, hand_pose.r.z, hand_pose.r.w])
-
+    ee_handles = gym.find_actor_rigid_body_handle(env, franka_handle, "k_ee_link")
     # Get global index of hand in rigid body state tensor
     hand_idx = gym.find_actor_rigid_body_index(env, franka_handle, "panda_hand", gymapi.DOMAIN_SIM)
     hand_idxs.append(hand_idx)
+    env_cam_handles = []
+    for j in range(camera_count):  # Set up cameras for the current environment.
+        cam_handle, _ = setup_cam(gym, env, cam_width, cam_height, camera_poses[j], cam_target)
+        env_cam_handles.append(cam_handle)
+    all_cam_handles.append(env_cam_handles)
 
 # Point camera at middle env
 cam_pos = gymapi.Vec3(4, 3, 3)
 cam_target = gymapi.Vec3(-4, -3, 0)
 middle_env = envs[num_envs // 2 + num_per_row // 2]
-gym.viewer_camera_look_at(viewer, middle_env, cam_pos, cam_target)
+gym.viewer_camera_look_at(viewer, envs[0], cam_pos, cam_target)
 
 # ==== prepare tensors =====
 # from now on, we will use the tensor API to access and control the physics simulation
@@ -244,8 +279,10 @@ itr = 0
 e = KeyboardInterface(init_pos, init_orn)
 pos_action = torch.zeros_like(dof_pos)
 
-while not gym.query_viewer_has_closed(viewer):
 
+        
+while not gym.query_viewer_has_closed(viewer):
+    display_camera_views(gym, sim, envs[0], all_cam_handles[0])
     box_pos = rb_states[box_idxs, :3]
     box_rot = rb_states[box_idxs, 3:7]
     itr += 1
@@ -280,9 +317,12 @@ while not gym.query_viewer_has_closed(viewer):
     # Step rendering
     gym.step_graphics(sim)
     gym.draw_viewer(viewer, sim, False)
+    gym.render_all_camera_sensors(sim)
+    gym.start_access_image_tensors(sim)
     # gym.sync_frame_time(sim)
 
 print("Done")
 
 gym.destroy_viewer(viewer)
 gym.destroy_sim(sim)
+cv2.destroyAllWindows()  # Close OpenCV windows when exiting the loop.
