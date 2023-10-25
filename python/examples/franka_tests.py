@@ -169,12 +169,14 @@ def display_camera_views(gym, sim, env, cam_handles):
     for handle in cam_handles:
         # Get the RGBA image from the camera
         image = gym.get_camera_image(sim, env, handle, gymapi.IMAGE_COLOR)    
-
+        image = image.reshape(image.shape[0], -1, 4)
         # img_cv2 = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
-        images.append(image)
+        # cam_img = obs['obs'][:3].permute(1, 2, 0).cpu().numpy()
+        # image = image[:3].permute(1, 2, 0)#.cpu().numpy()        
+        images.append(image[:,:,:3])
 
     # Stack the images horizontally (side by side)
-    combined_image = np.hstack(images)
+    combined_image = np.concatenate((images[0], images[1]), axis=1)
 
     # Display the combined image
     cv2.imshow('Camera Views', combined_image)
