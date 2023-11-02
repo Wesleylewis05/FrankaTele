@@ -112,10 +112,14 @@ class TeleEnv:
         cam_target = gymapi.Vec3(-4, -3, 0)
         middle_env = self.envs[self.num_envs // 2 + self.num_per_row // 2]
         self.gym.viewer_camera_look_at(self.viewer, self.envs[0], cam_pos, cam_target)
+
+
+
+
+
         
     def create_franka(self):
         self.frankas = []
-        print("eeeee: ",self.frankas)
         # Load franka asset
         asset_root = "../../assets"
         franka_asset_file = "urdf/franka_description/robots/franka_panda.urdf"
@@ -301,15 +305,25 @@ class TeleEnv:
         # ==== prepare tensors =====
         # from now on, we will use the tensor API to access and control the physics simulation
         self.gym.prepare_sim(self.sim)
+        # Initialize lists to hold position and orientation for each Franka
         self.new_init_orn_list = []
         self.new_init_pos_list = []
-        # Rigid body state tensor
+        
+        # Acquire and wrap the rigid body state tensor
         _rb_states = self.gym.acquire_rigid_body_state_tensor(self.sim)
         self.rb_states = gymtorch.wrap_tensor(_rb_states)
+
+        # Acquire and wrap the DOF state tensor
+        _dof_states = self.gym.acquire_dof_state_tensor(self.sim)
+        self.dof_states = gymtorch.wrap_tensor(_dof_states)
+
         for i in range(self.num_frankas):
+            print("This is i: ",i)
             # initial hand position and orientation tensors
             init_pos = torch.Tensor(self.init_pos_list[i]).view(self.num_envs, 3)
             init_orn = torch.Tensor(self.init_orn_list[i]).view(self.num_envs, 4)
+
+            
             if args.use_gpu_pipeline:
                 init_pos = init_pos.to('cuda:0')
                 init_orn = init_orn.to('cuda:0')
@@ -334,19 +348,49 @@ class TeleEnv:
             # For franka, tensor shape is (num_envs, 9, 9)
             _massmatrix = self.gym.acquire_mass_matrix_tensor(self.sim, "franka")
             self.mm = gymtorch.wrap_tensor(_massmatrix)
-            self.mm = self.mm[:, :7, :7]          # only need elements corresponding to the franka arm
-
+            self.mm = self.mm[:, :7, :7] # only need elements corresponding to the franka arm
             self.kp = 5
             self.kv = 2 * math.sqrt(self.kp)
-            # DOF state tensor
-            _dof_states = self.gym.acquire_dof_state_tensor(self.sim)
-            self.dof_states = gymtorch.wrap_tensor(_dof_states)
             dof_vel = self.dof_states[:, 1].view(self.num_envs, 9*self.num_frankas, 1)
-            self.trimmed_vel = dof_vel[:, :7] # only need elements corresponding to the franka arm
-            dof_pos = self.dof_states[:, 0].view(self.num_envs, 9*self.num_frankas, 1)
-            self.e = KeyboardInterface(init_pos, init_orn)
-            self.pos_action = torch.zeros_like(dof_pos)
+            self.trimmed_vel_list = []
+            for j in range(self.num_frankas):
+                # Extracting the DOF velocities for robot i and trimming to the first 7
+                start_idx = j * 9  # Start index for robot i's DOFs
+                end_idx = start_idx + 7  # End index for the arm DOFs, exclusive
+                trimmed_vel = dof_vel[:, start_idx:end_idx]  # shape [num_envs, 7]
+                self.trimmed_vel_list.append(trimmed_vel)
 
+
+
+            dof_pos = self.dof_states[:, 0].view(self.num_envs, 9* self.num_frankas, 1)
+            
+
+            # Now, separate the positions for each robot within each environment
+            self.dof_pos_list = []
+            for k in range(self.num_frankas):
+                start_idx = k * 9
+                robot_dof_pos = dof_pos[:, start_idx:start_idx+9].view(self.num_envs, 9, 1)
+                self.dof_pos_list.append(robot_dof_pos)
+
+            if i == 0: # First Franka
+                print("got here1")
+                self.keyboard_interface = KeyboardInterface(init_pos, init_orn)
+                self.pos_action = torch.zeros_like(self.dof_pos_list[i])
+            elif i == 1: # Second Franka
+                print("got here2")
+                custom_pose_actions = ["1", "2", "3", "4", "5", "6"]
+                custom_grip_actions = ["7"]
+                custom_rot_actions = ["8", "9", "0", "b", "n", "m"]
+
+                self.second_keyboard_interface = KeyboardInterface(
+                    init_pos,
+                    init_orn,
+                    pose_actions=custom_pose_actions,
+                    grip_actions=custom_grip_actions,
+                    rot_actions=custom_rot_actions
+                )
+                self.second_pos_action = torch.zeros_like(self.dof_pos_list[i])
+            
     def compute_hand_indices(self):
         # Base hand index for the first robot with no cubes
         base_idx = 8
@@ -368,7 +412,7 @@ class TeleEnv:
             self.gym.refresh_dof_state_tensor(self.sim)
             self.gym.refresh_jacobian_tensors(self.sim)
             self.gym.refresh_mass_matrix_tensors(self.sim)
-            for franka in self.frankas:
+            for _ in self.frankas:
 
                 # self.display_camera_views(self.envs[0], self.all_cam_handles[0])
                 box_pos = self.rb_states[self.box_idxs, :3]
@@ -378,33 +422,57 @@ class TeleEnv:
                 # Store tensors in lists for easy access
                 pos_cur_list = [pos_cur[i] for i in range(pos_cur.shape[0])]
                 orn_cur_list = [orn_cur[i] for i in range(orn_cur.shape[0])]
-
-                # check for movements
-                pos_des, orn_des, gripper = self.e.get_action()                
+                combined_actions = []
                 for i in range(self.num_frankas):
+                    if i == 0:
+                        # check for movements
+                        pos_des, orn_des, gripper = self.keyboard_interface.get_action() 
+                        curr_pos = pos_cur_list[i].unsqueeze(0)
+                        curr_orn = orn_cur_list[i].unsqueeze(0)
+                        # Solve for control (Operational Space Control)
+                        m_inv = torch.inverse(self.mm[i]) 
+                        m_eef = torch.inverse(self.j_eef[i] @ m_inv @ torch.transpose(self.j_eef[i], 0, 1))
+                        curr_orn /= torch.norm(curr_orn, dim=-1).unsqueeze(-1)
+                        orn_err = orientation_error(orn_des, curr_orn)
+                        pos_err = self.kp * (pos_des - curr_pos)
+                        if not args.pos_control:
+                            pos_err *= 0
+                        dpose = torch.cat([pos_err, orn_err], -1)
+                        # action Tensor
+                        u = torch.transpose(self.j_eef[i], 0, 1) @ m_eef @ (self.kp * dpose).unsqueeze(-1) - self.kv * self.mm[i] @ self.trimmed_vel_list[i]
+                        # Assign u to the correct slice of self.pos_action
+                        self.pos_action[:, :7] = u
+                        self.pos_action[:, 7:9] = torch.Tensor([[gripper,gripper]])
+                        # Append the action for the first robot to the combined actions list
+                        combined_actions.append(self.pos_action)
+                    elif i == 1:
+                        pos_des, orn_des, gripper = self.second_keyboard_interface.get_action()
+                        curr_pos = pos_cur_list[i].unsqueeze(0)
+                        curr_orn = orn_cur_list[i].unsqueeze(0)
+                        # Solve for control (Operational Space Control)
+                        m_inv = torch.inverse(self.mm[i]) 
+                        m_eef = torch.inverse(self.j_eef[i] @ m_inv @ torch.transpose(self.j_eef[i], 0, 1))
+                        curr_orn /= torch.norm(curr_orn, dim=-1).unsqueeze(-1)
+                        orn_err = orientation_error(orn_des, curr_orn)
+                        pos_err = self.kp * (pos_des - curr_pos)
+                        if not args.pos_control:
+                            pos_err *= 0
+                        dpose = torch.cat([pos_err, orn_err], -1)
+                        # action Tensor
+                        u = torch.transpose(self.j_eef[i], 0, 1) @ m_eef @ (self.kp * dpose).unsqueeze(-1) - self.kv * self.mm[i] @ self.trimmed_vel_list[i]
+                        # Assign u to the correct slice of self.pos_action
+                        self.second_pos_action[:, :7] = u
+                        self.second_pos_action[:, 7:9] = torch.Tensor([[gripper,gripper]])
+                        combined_actions.append(self.second_pos_action)
+                        
+                    # Concatenate the actions for all robots
+                    combined_pos_action = torch.cat(combined_actions, dim=1)
+                    # Make sure the combined tensor is the correct shape: (num_envs, num_dofs * num_robots, 1)
+                    combined_pos_action = combined_pos_action.view(self.num_envs, 9*self.num_frankas, 1)
 
-                    curr_pos = pos_cur_list[i].unsqueeze(0)
-                    curr_orn = orn_cur_list[i].unsqueeze(0)
+                    # Set the combined tensor action for both robots
+                    self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(combined_pos_action))
 
-                    # Solve for control (Operational Space Control)
-                    m_inv = torch.inverse(self.mm[i]) 
-                    m_eef = torch.inverse(self.j_eef[i] @ m_inv @ torch.transpose(self.j_eef[i], 0, 1))
-                    curr_orn /= torch.norm(curr_orn, dim=-1).unsqueeze(-1)
-                    orn_err = orientation_error(orn_des, curr_orn)
-                    pos_err = self.kp * (pos_des - curr_pos)
-                    if not args.pos_control:
-                        pos_err *= 0
-                    dpose = torch.cat([pos_err, orn_err], -1)
-                    # action Tensor
-                    u = torch.transpose(self.j_eef[i], 0, 1) @ m_eef @ (self.kp * dpose).unsqueeze(-1) - self.kv * self.mm[i] @ self.trimmed_vel
-                    # Assign u to the correct slice of self.pos_action
-                    start_idx = i * 7
-                    end_idx = start_idx + 7
-                    self.pos_action[:, start_idx:end_idx, :] = u
-                    # add gripper inputs
-                    self.pos_action[:, 7:9] = torch.Tensor([[gripper,gripper]])
-                    # Set tensor action
-                    self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self.pos_action))
             # Step the physics
             self.gym.simulate(self.sim)
             self.gym.fetch_results(self.sim, True)

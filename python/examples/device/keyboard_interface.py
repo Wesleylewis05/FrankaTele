@@ -12,16 +12,21 @@ import device.transform as T
 class KeyboardInterface(DeviceInterface):
     """Define keyboard interface to control franka."""
 
-    POSE_ACTIONS = ["s", "w", "a", "d", "e", "q"]
-    GRIP_ACTIONS = ["z"]
-    ROT_ACTIONS = ["i", "k", "j", "l", "u", "o"]
+    POSE_ACTIONS = None
+    GRIP_ACTIONS = None
+    ROT_ACTIONS = None
 
     # Only these actions are exposed to gym environment.
-    ACTIONS = POSE_ACTIONS + GRIP_ACTIONS + ROT_ACTIONS
+    ACTIONS = None
     INIT_POS_DELTA = 0.01 # MAX_POS_DELTA = 0.1
     INIT_ROT_DELTA = 0.13  # Radian. MAX_ROT_DELTA = 0.2 
 
-    def __init__(self,default_pos, default_ori):
+    def __init__(self,default_pos, default_ori, pose_actions=None, grip_actions=None, rot_actions=None):
+        # Assign the action mappings if provided, otherwise use defaults
+        KeyboardInterface.POSE_ACTIONS = pose_actions if pose_actions is not None else ["s", "w", "a", "d", "e", "q"]
+        KeyboardInterface.GRIP_ACTIONS = grip_actions if grip_actions is not None else ["z"]
+        KeyboardInterface.ROT_ACTIONS = rot_actions if rot_actions is not None else ["i", "k", "j", "l", "u", "o"]
+        KeyboardInterface.ACTIONS = KeyboardInterface.POSE_ACTIONS + KeyboardInterface.GRIP_ACTIONS + KeyboardInterface.ROT_ACTIONS
         self.default_pos = default_pos
         self.default_ori = default_ori
         self.reset()
@@ -84,39 +89,39 @@ class KeyboardInterface(DeviceInterface):
             pass
 
     def _pose_action(self, k):
-        if k == "w":
+        if k == KeyboardInterface.ACTIONS[1]:
             self.pos[0][0] -= self.pos_delta
-        elif k == "s":
+        elif k == KeyboardInterface.ACTIONS[0]:
             self.pos[0][0] += self.pos_delta
-        elif k == "a":
+        elif k == KeyboardInterface.ACTIONS[2]:
             self.pos[0][1] -= self.pos_delta
-        elif k == "d":
+        elif k == KeyboardInterface.ACTIONS[3]:
             self.pos[0][1] += self.pos_delta
-        elif k == "q":
+        elif k == KeyboardInterface.ACTIONS[5]:
             self.pos[0][2] -= self.pos_delta
-        elif k == "e":
+        elif k == KeyboardInterface.ACTIONS[4]:
             self.pos[0][2] += self.pos_delta
 
     def _grip_action(self, k):
-        if k == "z" and self.grasping == True:
+        if k == KeyboardInterface.ACTIONS[6] and self.grasping == True:
             self.grasp = [30]
             self.grasping = False
-        elif k == "z" and self.grasping == False:
+        elif k == KeyboardInterface.ACTIONS[6] and self.grasping == False:
             self.grasp = [0]
             self.grasping = True
 
     def _rot_action(self, k):
-        if k == "k":
+        if k == KeyboardInterface.ACTIONS[8]:
             self.ori[0][1] += self.rot_delta
-        elif k == "i":
+        elif k == KeyboardInterface.ACTIONS[7]:
             self.ori[0][1] -= self.rot_delta
-        elif k == "j":
+        elif k == KeyboardInterface.ACTIONS[9]:
             self.ori[0][0] += self.rot_delta
-        elif k == "l":
+        elif k == KeyboardInterface.ACTIONS[10]:
             self.ori[0][0] -= self.rot_delta
-        elif k == "o":
+        elif k == KeyboardInterface.ACTIONS[12]:
             self.ori[0][2] -= self.rot_delta
-        elif k == "u":
+        elif k == KeyboardInterface.ACTIONS[11]:
             self.ori[0][2] += self.rot_delta
 
     def get_action(self):
@@ -129,15 +134,15 @@ class KeyboardInterface(DeviceInterface):
     def print_usage(self):
         print("==============Keyboard Usage=================")
         print("Positional movements in base frame")
-        print("q (- z-axis) w (- x-axis) e (+ z-axis)")
-        print("a (- y-axis) s (+ x-axis) d (+ y-axis)")
+        print(f"{KeyboardInterface.ACTIONS[5]} (- z-axis) {KeyboardInterface.ACTIONS[1]} (- x-axis) {KeyboardInterface.ACTIONS[4]} (+ z-axis)")
+        print(f"{KeyboardInterface.ACTIONS[2]} (- y-axis) {KeyboardInterface.ACTIONS[0]} (+ x-axis) {KeyboardInterface.ACTIONS[3]} (+ y-axis)")
 
         print("Rotational movements in base frame")
-        print("u (- z-axis-rot) i (neg y-axis-rot)  o (+ z-axis)")
-        print("j (pos x-axis-rot) k (pos y-axis-rot)  l (neg x-axis-rot)")
+        print(f"{KeyboardInterface.ACTIONS[11]} (- z-axis-rot) {KeyboardInterface.ACTIONS[7]} (neg y-axis-rot)  {KeyboardInterface.ACTIONS[12]} (+ z-axis)")
+        print(f"{KeyboardInterface.ACTIONS[9]} (pos x-axis-rot) {KeyboardInterface.ACTIONS[8]} (pos y-axis-rot)  {KeyboardInterface.ACTIONS[10]} (neg x-axis-rot)")
 
         print("Toggle gripper open and close")
-        print("z")
+        print(f"{KeyboardInterface.ACTIONS[6]}")
         print("===============================")
 
     def close(self):
